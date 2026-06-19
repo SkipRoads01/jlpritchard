@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>&nbsp;</title>
+<style>
+  /* ============================================================
+     v0.2 — media is the whole site. no copy. chaotic/blurry/loopy.
+     ============================================================ */
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;background:#000;overflow:hidden;cursor:crosshair;}
+  body{position:relative;}
+
+  /* full-bleed cycling background video, blurred + saturated */
+  .bg{
+    position:fixed; inset:-6vmax; z-index:0;
+    width:calc(100% + 12vmax); height:calc(100% + 12vmax);
+    object-fit:cover;
+    filter:blur(9px) saturate(1.2) contrast(1.02) brightness(.9);
+    opacity:0; transition:opacity 1.6s ease;
+    transform:scale(1.06);
+  }
+  .bg.show{opacity:.5;}   /* atmosphere only — foreground video is the star */
+
+  /* drifting layer that holds video tiles + images */
+  #field{position:fixed; inset:0; z-index:1;}
+  .tile{
+    position:absolute; will-change:transform, opacity;
+    transition:opacity 1.8s ease, transform .6s cubic-bezier(.22,.61,.36,1);
+    cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none;
+  }
+  .tile.dragging{ cursor:grabbing; }
+  .tile.pinned{ cursor:grab; }
+  .tile .inner{
+    position:absolute; inset:0;
+    border-radius:4px; overflow:hidden;
+    will-change:transform;
+  }
+  .tile video, .tile img{
+    display:block; width:100%; height:100%; object-fit:cover;
+  }
+  /* blend modes make everything bleed into everything */
+  .tile.vid{ mix-blend-mode:screen; filter:saturate(1.3) contrast(1.1); }
+  .tile.img{ mix-blend-mode:multiply; filter:saturate(1.15); }
+  .tile.blur{ filter:blur(6px) saturate(1.4); }
+
+  /* ---- native music player: minimal, blended over the media ---- */
+  #player{
+    position:fixed; left:50%; bottom:24px; transform:translateX(-50%);
+    z-index:50; display:flex; align-items:center; gap:14px;
+    mix-blend-mode:difference; color:#fff;
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
+  }
+  #player[hidden]{display:none;}
+  #pp{
+    appearance:none; -webkit-appearance:none; background:none;
+    border:2px solid #fff; color:#fff; width:46px; height:46px;
+    border-radius:50%; cursor:pointer; font-size:14px; line-height:1;
+    display:flex; align-items:center; justify-content:center; padding-left:2px;
+    transition:background .2s ease, color .2s ease;
+  }
+  #pp:hover{ background:#fff; color:#000; }
+  #seek{ width:40vw; max-width:440px; height:3px; background:rgba(255,255,255,.35); position:relative; cursor:pointer; }
+  #seekfill{ position:absolute; left:0; top:0; bottom:0; width:0; background:#fff; }
+  #ptitle{ font-size:11px; letter-spacing:.2em; text-transform:uppercase; white-space:nowrap; opacity:.85; }
+
+  /* slow looping drifts — several variants so nothing syncs up */
+  @keyframes d0{0%{transform:translate(0,0) rotate(0deg);}100%{transform:translate(4vw,-5vh) rotate(6deg);}}
+  @keyframes d1{0%{transform:translate(0,0) rotate(0deg);}100%{transform:translate(-5vw,4vh) rotate(-8deg);}}
+  @keyframes d2{0%{transform:translate(0,0) scale(1);}100%{transform:translate(3vw,6vh) scale(1.12);}}
+  @keyframes d3{0%{transform:translate(0,0) rotate(2deg);}100%{transform:translate(-4vw,-4vh) rotate(-5deg);}}
+  @keyframes d4{0%{transform:translate(0,0) scale(1) rotate(-3deg);}100%{transform:translate(6vw,3vh) scale(.9) rotate(4deg);}}
+  @keyframes d5{0%{transform:translate(0,0) scale(1.05);}100%{transform:translate(-3vw,-6vh) scale(1);}}
+  @keyframes breathe{0%,100%{filter:blur(10px) saturate(1.3);}50%{filter:blur(20px) saturate(1.6);}}
+
+  @media (prefers-reduced-motion: reduce){
+    *{animation:none!important;}
+    .bg{filter:blur(8px) saturate(1.2);}
+  }
+</style>
+</head>
+<body>
+  <video class="bg" id="bgA" muted playsinline></video>
+  <video class="bg" id="bgB" muted playsinline></video>
+  <div id="field"></div>
+
+  <!-- native music player (auto-revealed when audio tracks exist) -->
+  <div id="player" hidden>
+    <button id="pp" aria-label="play / pause">&#9654;</button>
+    <div id="seek"><div id="seekfill"></div></div>
+    <span id="ptitle"></span>
+    <audio id="audio" preload="metadata"></audio>
+  </div>
+
+<script>
+(async function(){
+  const data = await fetch('media/manifest.json').then(r=>r.json());
+  const VIDEOS = data.videos, IMAGES = data.images;
+  const rand = (a,b)=>a+Math.random()*(b-a);
+  const pick = arr => arr[Math.floor(Math.random()*arr.length)];
+  const shuffle = a => { a=a.slice(); for(let i=a.length-1;i>0;i--){const j=(Math.random()*(i+1))|0;[a[i],a[j]]=[a[j],a[i]];} return a; };
+
+  /* ---- image queue: serve every image before any repeats; never show
+         the same one twice on screen at once ---- */
+  let imgQueue = shuffle(IMAGES), qi = 0;
+  const onScreen = new Set();
+  function nextImage(prev){
+    if(prev) onScreen.delete(prev);
+    let src, tries = 0;
+    do {
+      if(qi >= imgQueue.length){ imgQueue = shuffle(IMAGES); qi = 0; }
+      src = imgQueue[qi++]; tries++;
+    } while(onScreen.has(src) && tries <= imgQueue.length);
+    onScreen.add(src);
+    return src;
+  }
+
+  /* ---- video queue: distinct clips across bg + tiles ---- */
+  const vidQueue = shuffle(VIDEOS); let vqi = 0;
+  const nextVideo = () => vidQueue[(vqi++) % vidQueue.length];
+
+  /* ---- cycling blurred background video (crossfade A/B) ---- */
+  const bgA = document.getElementById('bgA'), bgB = document.getElementById('bgB');
+  let cur = bgA, nxt = bgB;
+  function loadNextBg(){
+    nxt.src = nextVideo();
+    nxt.play().catch(()=>{});
+    nxt.classList.add('show'); cur.classList.remove('show');
+    [cur,nxt] = [nxt,cur];
+  }
+  bgA.src = nextVideo(); bgA.play().catch(()=>{}); bgA.classList.add('show');
+  setInterval(loadNextBg, 14000);
+
+  /* ---- scattered floating tiles ---- */
+  const field = document.getElementById('field');
+  const liveVideos = [bgA, bgB];
+
+  /* ---- dreamy wandering paths: each tile roams its own slow, seamless loop
+         (starts & ends at 0,0 so the infinite loop never jumps) ---- */
+  const WANDER_N = 16;
+  (function buildWander(){
+    const sign = ()=> Math.random()<0.5 ? -1 : 1;
+    let css = '';
+    for(let i=0;i<WANDER_N;i++){
+      let frames = '';
+      for(const s of [0,20,40,60,80,100]){
+        let x=0,y=0,r=0,sc=1;
+        if(s!==0 && s!==100){
+          x  = (sign()*rand(5,12)).toFixed(1);
+          y  = (sign()*rand(5,12)).toFixed(1);
+          r  = (sign()*rand(2,7)).toFixed(1);
+          sc = rand(0.92,1.1).toFixed(3);
+        }
+        frames += `${s}%{transform:translate(${x}vw,${y}vh) rotate(${r}deg) scale(${sc});}`;
+      }
+      css += `@keyframes wander${i}{${frames}}`;
+    }
+    const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
+  })();
+
+  function place(t, inner, o){
+    o = o || {};
+    t.style.width  = rand(o.wMin||15, o.wMax||34) + 'vw';
+    t.style.height = rand(o.hMin||13, o.hMax||30) + 'vw';
+    t.style.left   = rand(-6,86) + 'vw';
+    t.style.top    = rand(-6,84) + 'vh';
+    t.style.opacity = rand(.6,.96).toFixed(2);
+    const z = Math.floor(rand(1,30));
+    t.style.zIndex = z;
+    t.dataset.depth = (0.25 + z/30 * 1.05).toFixed(2);   // closer tiles react more
+    const dur = rand(55,120).toFixed(1);                 // slow + wide range = varied paces
+    const delay = (-rand(0,50)).toFixed(1);              // negative delay desyncs every tile
+    inner.style.animation = `wander${(Math.random()*WANDER_N)|0} ${dur}s ease-in-out ${delay}s infinite`;
+  }
+
+  /* drag a tile to place + pin it; a click (no drag) fires onClick */
+  function enableDrag(t, inner, onClick, onPin){
+    let downId=null, sx=0, sy=0, baseL=0, baseT=0, dragging=false;
+    t.addEventListener('pointerdown', e=>{
+      if(e.button!=null && e.button!==0) return;        // primary / touch only
+      downId = e.pointerId; dragging = false;
+      const r = t.getBoundingClientRect();
+      sx = e.clientX; sy = e.clientY; baseL = r.left; baseT = r.top;
+      try{ t.setPointerCapture(downId); }catch(_){}
+    });
+    t.addEventListener('pointermove', e=>{
+      if(downId===null || e.pointerId!==downId) return;
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if(!dragging && Math.hypot(dx,dy) > 5){            // crossed threshold → drag
+        dragging = true;
+        t.dataset.pinned = '1';                          // excluded from parallax now
+        if(onPin) onPin();                               // stop montage / lifespan
+        inner.style.animation = 'none';
+        t.style.transition = 'none';
+        t.style.transform = 'none';
+        t.style.width  = t.offsetWidth + 'px';
+        t.style.height = t.offsetHeight + 'px';
+        t.style.left = baseL + 'px'; t.style.top = baseT + 'px';
+        t.style.zIndex = 9999;
+        t.classList.add('dragging');
+      }
+      if(dragging){
+        t.style.left = (baseL + dx) + 'px';
+        t.style.top  = (baseT + dy) + 'px';
+      }
+    });
+    function end(){
+      if(downId===null) return;
+      try{ t.releasePointerCapture(downId); }catch(_){}
+      if(!dragging){ if(onClick) onClick(); }            // it was a click → flip
+      else { t.classList.remove('dragging'); t.classList.add('pinned'); }
+      downId = null;
+    }
+    t.addEventListener('pointerup', end);
+    t.addEventListener('pointercancel', end);
+  }
+
+  function spawnVideoTile(){
+    const t = document.createElement('div');
+    t.className = 'tile vid';                                // never blurred — sharp
+    const inner = document.createElement('div'); inner.className = 'inner';
+    t.appendChild(inner);
+    place(t, inner, {wMin:16, wMax:31, hMin:14, hMax:27});  // image-sized, present
+    const z = Math.floor(rand(22,40));                      // sit forward of images
+    t.style.zIndex = z; t.dataset.depth = (0.5 + z/40 * 0.9).toFixed(2);
+    t.style.opacity = '1';                                  // full strength
+    const target = t.style.opacity;     // intended opacity (place set it)
+    t.style.opacity = '0';              // start invisible, fade in
+    const v = document.createElement('video');
+    v.src = nextVideo(); v.muted = true; v.loop = true;
+    v.playsInline = true; v.autoplay = true;
+    v.addEventListener('canplay', ()=>v.play().catch(()=>{}));
+    liveVideos.push(v); inner.appendChild(v); field.appendChild(t);
+    requestAnimationFrame(()=>{ t.style.opacity = target; });
+
+    // lifespan: play a while, fade out, remove, then a new clip appears elsewhere.
+    // a pinned (dragged) tile cancels this so it stays where you left it.
+    const retire = setTimeout(()=>{
+      t.style.opacity = '0';
+      setTimeout(()=>{
+        const i = liveVideos.indexOf(v); if(i>-1) liveVideos.splice(i,1);
+        try{ v.pause(); v.removeAttribute('src'); v.load(); }catch(e){}
+        t.remove();
+        spawnVideoTile();              // keep the count constant, new spot + clip
+      }, 1900);
+    }, rand(28000, 48000));
+
+    enableDrag(t, inner, null, ()=>clearTimeout(retire));  // draggable; click does nothing for video
+  }
+
+  function makeImageTile(){
+    const t = document.createElement('div');
+    t.className = 'tile img' + (Math.random()<0.3?' blur':'');
+    const inner = document.createElement('div'); inner.className = 'inner';
+    t.appendChild(inner);
+    place(t, inner);
+    const img = new Image();
+    img.style.transition = 'opacity 1.2s ease';
+    img.dataset.cur = nextImage(null);
+    img.src = img.dataset.cur;
+    inner.appendChild(img); field.appendChild(t);
+
+    // fade to the next image; `relocate` is skipped once a tile is pinned
+    function showNext(relocate){
+      img.style.opacity = '0';
+      setTimeout(()=>{
+        const nx = nextImage(img.dataset.cur);
+        img.dataset.cur = nx;
+        img.onload = ()=>{ img.style.opacity = '1'; };
+        img.src = nx;
+        if(relocate && !t.dataset.pinned) place(t, inner);
+      }, 1200);
+    }
+
+    // montage: staggered, slow auto-swap-with-relocate
+    const period = rand(16000, 30000);
+    let kickoff = setTimeout(()=>{ showNext(true); t._montage = setInterval(()=>showNext(true), period); }, rand(0, period));
+
+    // drag to place + pin; click (no drag) flips to the next image in place
+    enableDrag(
+      t, inner,
+      ()=> showNext(false),                                   // onClick: flip, stay put
+      ()=>{ clearTimeout(kickoff); clearInterval(t._montage); } // onPin: stop autonomous motion
+    );
+  }
+
+  for(let i=0;i<3;i++)  spawnVideoTile();  // decoder limit keeps this small
+  for(let i=0;i<18;i++) makeImageTile();   // images carry the montage
+
+  /* ---- pointer / touch: parallax drift + gentle repel near the cursor ---- */
+  (function interact(){
+    let mx = innerWidth/2, my = innerHeight/2, raf = 0;
+    const PAR = 70;     // max parallax shift (px) at full depth
+    const R   = 340;    // repel radius (px)
+    const PUSH= 180;    // max repel strength (px)
+    function apply(){
+      raf = 0;
+      const vw = innerWidth, vh = innerHeight;
+      for(const t of field.children){
+        if(t.dataset.pinned) continue;     // dropped tiles stay exactly where left
+        const depth = +t.dataset.depth || 0.5;
+        let ox = (mx - vw/2)/vw * depth * PAR;
+        let oy = (my - vh/2)/vh * depth * PAR;
+        // repel uses the tile's untransformed layout center (stable, no feedback)
+        const cx = t.offsetLeft + t.offsetWidth/2;
+        const cy = t.offsetTop  + t.offsetHeight/2;
+        const dx = cx - mx, dy = cy - my, dist = Math.hypot(dx,dy);
+        if(dist < R){ const f = (1 - dist/R); const p = f*f*PUSH; const inv = 1/(dist||1); ox += dx*inv*p; oy += dy*inv*p; }
+        t.style.transform = `translate3d(${ox.toFixed(1)}px, ${oy.toFixed(1)}px, 0)`;
+      }
+    }
+    function schedule(){ if(!raf) raf = requestAnimationFrame(apply); }
+    addEventListener('pointermove', e=>{ mx = e.clientX; my = e.clientY; schedule(); }, {passive:true});
+    // ease everything back to rest when the pointer leaves the window
+    addEventListener('pointerleave', ()=>{ mx = innerWidth/2; my = innerHeight/2; schedule(); });
+  })();
+
+  /* ---- native music player (revealed only when tracks exist) ---- */
+  (function player(){
+    const tracks = data.audio || [];
+    if(!tracks.length) return;             // stays hidden until you add audio
+    const el    = document.getElementById('player');
+    const audio = document.getElementById('audio');
+    const pp    = document.getElementById('pp');
+    const seek  = document.getElementById('seek');
+    const fill  = document.getElementById('seekfill');
+    const title = document.getElementById('ptitle');
+    const PLAY = '▶', PAUSE = '❚❚';
+    let ti = 0;
+    function load(i){ ti=(i+tracks.length)%tracks.length; audio.src=tracks[ti].src; title.textContent=tracks[ti].title; }
+    pp.addEventListener('click', ()=>{
+      if(audio.paused){ audio.play(); pp.textContent=PAUSE; }
+      else { audio.pause(); pp.textContent=PLAY; }
+    });
+    audio.addEventListener('timeupdate', ()=>{ if(audio.duration) fill.style.width=(audio.currentTime/audio.duration*100)+'%'; });
+    audio.addEventListener('ended', ()=>{ load(ti+1); audio.play(); });
+    seek.addEventListener('click', e=>{ const r=seek.getBoundingClientRect(); if(audio.duration) audio.currentTime=(e.clientX-r.left)/r.width*audio.duration; });
+    load(0);
+    el.hidden = false;
+  })();
+
+  // robustness: retry autoplay on any gesture / when tab regains focus
+  function kick(){ liveVideos.forEach(v=>v.play().catch(()=>{})); }
+  ['pointerdown','keydown','touchstart'].forEach(e=>window.addEventListener(e,kick,{passive:true}));
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden) kick(); });
+})();
+</script>
+</body>
+</html>

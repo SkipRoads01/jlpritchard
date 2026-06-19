@@ -1,0 +1,18 @@
+# Raw, unoptimized source assets — these stay LOCAL only, never pushed.
+# The site uses web-optimized copies in /media (which IS committed).
+/assets/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.swp
+
+# Node
+node_modules/
+dist/
+.cache/
+
+# Local Claude Code config (not needed in the public repo)
+.claude/settings.local.json
+.claude/settings.json
+.claude/launch.json
