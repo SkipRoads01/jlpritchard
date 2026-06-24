@@ -391,14 +391,28 @@
     // trusting its initial value — otherwise every index wraps against a count of 1.
     let wc = null;
     const cmd = ()=> wc || (wc = SC.Widget(document.getElementById('sc')));
-    function goto(n){
+    function jump(n){
       if(!count) return;
-      cur = ((n % count) + count) % count;       // wrap both ends → endless station
+      cur = ((n % count) + count) % count;
       // skip + play on a wrapper made after load (the long-lived `w` has a broken
       // skip()), deferred off any widget event callback where a skip() would no-op.
       setTimeout(()=>{ const x = cmd(); x.skip(cur); x.play(); }, 0);
     }
-    function advance(){ if(advancing) return; advancing = true; goto(cur + 1); }
+    // true shuffle: draw from a bag holding every track once (reshuffled when empty,
+    // never repeating across the seam) so albums never play in their pressed order.
+    // `history` records what actually played so ⏮/⏭ can walk back and forth.
+    let bag = [], history = [], hpos = -1;
+    function shuffleBag(){
+      bag = shuffle(Array.from({length:count}, (_,i)=>i));
+      if(bag.length > 1 && hpos >= 0 && bag[bag.length-1] === history[hpos]) bag.unshift(bag.pop());
+    }
+    function nextTrack(){
+      if(hpos < history.length - 1){ hpos++; }                 // step forward through past picks
+      else { if(!bag.length) shuffleBag(); history.push(bag.pop()); hpos = history.length - 1; }
+      jump(history[hpos]);
+    }
+    function prevTrack(){ if(hpos > 0){ hpos--; jump(history[hpos]); } }
+    function advance(){ if(advancing) return; advancing = true; nextTrack(); }
 
     const showTitle = ()=> w.getCurrentSound(s=>{
       if(!s) return;
@@ -432,11 +446,11 @@
 
     pp.addEventListener('click', ()=>{
       if(!ready) return;
-      if(!tunedIn){ tunedIn = true; pendingTune = true; goto((Math.random()*count)|0); return; }
+      if(!tunedIn){ tunedIn = true; pendingTune = true; nextTrack(); return; }
       w.isPaused(p => p ? w.play() : w.pause());
     });
-    prev.addEventListener('click', ()=>{ if(ready){ tunedIn = true; goto(cur - 1); } });
-    next.addEventListener('click', ()=>{ if(ready){ tunedIn = true; goto(cur + 1); } });
+    prev.addEventListener('click', ()=>{ if(ready){ tunedIn = true; prevTrack(); } });
+    next.addEventListener('click', ()=>{ if(ready){ tunedIn = true; nextTrack(); } });
     seek.addEventListener('click', e=>{
       const r = seek.getBoundingClientRect();
       w.getDuration(d=>{ if(d) w.seekTo((e.clientX-r.left)/r.width * d); });
