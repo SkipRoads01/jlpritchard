@@ -47,8 +47,8 @@
 
   /* ---- native music player: minimal, blended over the media ---- */
   #player{
-    position:fixed; left:50%; bottom:24px; transform:translateX(-50%);
-    z-index:50; display:flex; align-items:center; gap:14px;
+    position:fixed; left:22px; top:22px;
+    z-index:70; display:flex; align-items:center; gap:14px;
     mix-blend-mode:difference; color:#fff;
     font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
   }
@@ -61,9 +61,13 @@
     transition:background .2s ease, color .2s ease;
   }
   #pp:hover{ background:#fff; color:#000; }
-  #seek{ width:40vw; max-width:440px; height:3px; background:rgba(255,255,255,.35); position:relative; cursor:pointer; }
+  #seek{ width:34vw; max-width:380px; height:3px; background:rgba(255,255,255,.35); position:relative; cursor:pointer; }
   #seekfill{ position:absolute; left:0; top:0; bottom:0; width:0; background:#fff; }
-  #ptitle{ font-size:11px; letter-spacing:.2em; text-transform:uppercase; white-space:nowrap; opacity:.85; }
+  #ptitle{ font-size:11px; letter-spacing:.2em; text-transform:uppercase; white-space:nowrap; opacity:.85; max-width:20vw; overflow:hidden; text-overflow:ellipsis; }
+  /* narrow screens: keep the player compact so it never reaches the bottom-left icons */
+  @media (max-width:560px){ #ptitle{ display:none; } #seek{ width:30vw; } }
+  /* hidden SoundCloud engine — rendered (so it can play) but off-screen + invisible */
+  #sc{ position:fixed; left:-9999px; bottom:0; width:1px; height:1px; border:0; opacity:0; pointer-events:none; }
 
   /* ---- social links, bottom-left ---- */
   #social{ position:fixed; left:22px; bottom:22px; z-index:60; display:flex; gap:14px; align-items:center; }
@@ -101,13 +105,17 @@
     <a class="am" href="https://music.apple.com/us/artist/j-l-pritchard/1573117825" target="_blank" rel="noopener noreferrer" aria-label="Listen on Apple Music"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M23.994 6.124a9.23 9.23 0 00-.24-2.19c-.317-1.31-1.062-2.31-2.18-3.043a5.022 5.022 0 00-1.877-.726 10.496 10.496 0 00-1.564-.15c-.04-.003-.083-.01-.124-.013H5.986c-.152.01-.303.017-.455.026-.747.043-1.49.123-2.193.4-1.336.53-2.3 1.452-2.865 2.78-.192.448-.292.925-.363 1.408-.056.392-.088.785-.1 1.18 0 .032-.007.062-.01.093v12.223c.01.14.017.283.027.424.05.815.154 1.624.497 2.373.65 1.42 1.738 2.353 3.234 2.801.42.127.856.187 1.293.228.555.053 1.11.06 1.667.06h11.03a12.5 12.5 0 001.57-.1c.822-.106 1.596-.35 2.295-.81a5.046 5.046 0 001.88-2.207c.186-.42.293-.87.37-1.324.113-.675.138-1.358.137-2.04-.002-3.8 0-7.595-.003-11.393zm-6.423 3.99v5.712c0 .417-.058.827-.244 1.206-.29.59-.76.962-1.388 1.14-.35.1-.706.157-1.07.173-.95.045-1.773-.6-1.943-1.536a1.88 1.88 0 011.038-2.022c.323-.16.67-.25 1.018-.324.378-.082.758-.153 1.134-.24.274-.063.457-.23.51-.516a.904.904 0 00.02-.193c0-1.815 0-3.63-.002-5.443a.725.725 0 00-.026-.185c-.04-.15-.15-.243-.304-.234-.16.01-.318.035-.475.066-.76.15-1.52.303-2.28.456l-2.325.47-1.374.278c-.016.003-.032.01-.048.013-.277.077-.377.203-.39.49-.002.042 0 .086 0 .13-.002 2.602 0 5.204-.003 7.805 0 .42-.047.836-.215 1.227-.278.64-.77 1.04-1.434 1.233-.35.1-.71.16-1.075.172-.96.036-1.755-.6-1.92-1.544-.14-.812.23-1.685 1.154-2.075.357-.15.73-.232 1.108-.31.287-.06.575-.116.86-.177.383-.083.583-.323.6-.714v-.15c0-2.96 0-5.922.002-8.882 0-.123.013-.25.042-.37.07-.285.273-.448.546-.518.255-.066.515-.112.774-.165.733-.15 1.466-.296 2.2-.444l2.27-.46c.67-.134 1.34-.27 2.01-.403.22-.043.442-.088.663-.106.31-.025.523.17.554.482.008.073.012.148.012.223.002 1.91.002 3.822 0 5.732z"/></svg></a>
   </div>
 
-  <!-- native music player (auto-revealed when audio tracks exist) -->
+  <!-- the site's own minimal player UI (revealed once the station's queue loads) -->
   <div id="player" hidden>
     <button id="pp" aria-label="play / pause">&#9654;</button>
     <div id="seek"><div id="seekfill"></div></div>
     <span id="ptitle"></span>
-    <audio id="audio" preload="metadata"></audio>
   </div>
+
+  <!-- hidden SoundCloud engine: loads the profile's tracks; our UI drives it -->
+  <iframe id="sc" allow="autoplay" scrolling="no" frameborder="no"
+    src="https://w.soundcloud.com/player/?url=https%3A%2F%2Fsoundcloud.com%2Finnermostthoughts&auto_play=false&hide_related=true&show_comments=false&show_user=false&show_reposts=false&show_teaser=false&visual=false"></iframe>
+  <script src="https://w.soundcloud.com/player/api.js"></script>
 
 <script>
 (async function(){
@@ -332,28 +340,51 @@
     addEventListener('pointerleave', ()=>{ mx = innerWidth/2; my = innerHeight/2; schedule(); });
   })();
 
-  /* ---- native music player (revealed only when tracks exist) ---- */
-  (function player(){
-    const tracks = data.audio || [];
-    if(!tracks.length) return;             // stays hidden until you add audio
+  /* ---- perpetual radio: a hidden SoundCloud widget wearing the site's own
+         minimal UI. shuffles the profile's tracks, and the first play "tunes in"
+         mid-broadcast (random track, random offset) so the station feels like it
+         was already on the air before you arrived. loops forever. ---- */
+  (function radio(){
+    if(!window.SC || !SC.Widget) return;   // widget api failed to load → stay hidden
     const el    = document.getElementById('player');
-    const audio = document.getElementById('audio');
     const pp    = document.getElementById('pp');
     const seek  = document.getElementById('seek');
     const fill  = document.getElementById('seekfill');
     const title = document.getElementById('ptitle');
     const PLAY = '▶', PAUSE = '❚❚';
-    let ti = 0;
-    function load(i){ ti=(i+tracks.length)%tracks.length; audio.src=tracks[ti].src; title.textContent=tracks[ti].title; }
-    pp.addEventListener('click', ()=>{
-      if(audio.paused){ audio.play(); pp.textContent=PAUSE; }
-      else { audio.pause(); pp.textContent=PLAY; }
+    const w = SC.Widget(document.getElementById('sc'));
+    const E = SC.Widget.Events;
+    let order = [], idx = 0, ready = false, tunedIn = false, pendingTune = false;
+
+    const showTitle = ()=> w.getCurrentSound(s=>{
+      if(!s) return;
+      const y = (''+(s.release_year || s.display_date || s.created_at || '')).match(/\d{4}/);
+      title.textContent = y ? `${s.title} (${y[0]})` : s.title;
     });
-    audio.addEventListener('timeupdate', ()=>{ if(audio.duration) fill.style.width=(audio.currentTime/audio.duration*100)+'%'; });
-    audio.addEventListener('ended', ()=>{ load(ti+1); audio.play(); });
-    seek.addEventListener('click', e=>{ const r=seek.getBoundingClientRect(); if(audio.duration) audio.currentTime=(e.clientX-r.left)/r.width*audio.duration; });
-    load(0);
-    el.hidden = false;
+    const playAt = i => { if(order.length){ idx = (i+order.length)%order.length; w.skip(order[idx]); } };
+
+    w.bind(E.READY, ()=> w.getSounds(sounds=>{
+      order = shuffle(sounds.map((_,i)=>i));   // our own shuffled running order
+      ready = true;
+      el.hidden = false;                        // reveal controls now there's a queue
+    }));
+    w.bind(E.PLAY_PROGRESS, e=>{ fill.style.width = (e.relativePosition*100)+'%'; });
+    w.bind(E.PLAY, ()=>{
+      pp.textContent = PAUSE; showTitle();
+      if(pendingTune){ pendingTune = false; w.getDuration(d=>{ if(d) w.seekTo(Math.random()*d*0.9); }); }
+    });
+    w.bind(E.PAUSE,  ()=>{ pp.textContent = PLAY; });
+    w.bind(E.FINISH, ()=> playAt(idx+1));      // roll to the next track in our order
+
+    pp.addEventListener('click', ()=>{
+      if(!ready) return;
+      if(!tunedIn){ tunedIn = true; pendingTune = true; w.skip(order[0]); w.play(); return; }
+      w.isPaused(p => p ? w.play() : w.pause());
+    });
+    seek.addEventListener('click', e=>{
+      const r = seek.getBoundingClientRect();
+      w.getDuration(d=>{ if(d) w.seekTo((e.clientX-r.left)/r.width * d); });
+    });
   })();
 
   // robustness: retry autoplay on any gesture / when tab regains focus
