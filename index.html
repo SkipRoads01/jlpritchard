@@ -63,10 +63,12 @@
   #pp:hover{ background:#fff; color:#000; }
   #player .nav{
     appearance:none; -webkit-appearance:none; background:none; border:0;
-    color:#fff; cursor:pointer; font-size:18px; line-height:1; padding:4px;
+    color:#fff; cursor:pointer; padding:4px; line-height:0;
     opacity:.8; transition:opacity .2s ease;
+    display:flex; align-items:center; justify-content:center;
   }
   #player .nav:hover{ opacity:1; }
+  #player .nav svg{ width:22px; height:22px; fill:currentColor; display:block; }
   #seek{ width:34vw; max-width:380px; height:3px; background:rgba(255,255,255,.35); position:relative; cursor:pointer; }
   #seekfill{ position:absolute; left:0; top:0; bottom:0; width:0; background:#fff; }
   #ptitle{ font-size:11px; letter-spacing:.2em; text-transform:uppercase; white-space:nowrap; opacity:.85; }
@@ -113,9 +115,9 @@
 
   <!-- the site's own minimal player UI (revealed once the station's queue loads) -->
   <div id="player" hidden>
-    <button id="prev" class="nav" aria-label="previous track">&#9198;</button>
+    <button id="prev" class="nav" aria-label="previous track"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 5.5 9 12l8.5 6.5z"/><rect x="5.5" y="5.5" width="2.4" height="13" rx="1"/></svg></button>
     <button id="pp" aria-label="play / pause">&#9654;</button>
-    <button id="next" class="nav" aria-label="next track">&#9197;</button>
+    <button id="next" class="nav" aria-label="next track"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 5.5 15 12l-8.5 6.5z"/><rect x="16.1" y="5.5" width="2.4" height="13" rx="1"/></svg></button>
     <div id="seek"><div id="seekfill"></div></div>
     <span id="ptitle"></span>
   </div>
