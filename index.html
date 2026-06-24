@@ -61,11 +61,17 @@
     transition:background .2s ease, color .2s ease;
   }
   #pp:hover{ background:#fff; color:#000; }
+  #player .nav{
+    appearance:none; -webkit-appearance:none; background:none; border:0;
+    color:#fff; cursor:pointer; font-size:18px; line-height:1; padding:4px;
+    opacity:.8; transition:opacity .2s ease;
+  }
+  #player .nav:hover{ opacity:1; }
   #seek{ width:34vw; max-width:380px; height:3px; background:rgba(255,255,255,.35); position:relative; cursor:pointer; }
   #seekfill{ position:absolute; left:0; top:0; bottom:0; width:0; background:#fff; }
-  #ptitle{ font-size:11px; letter-spacing:.2em; text-transform:uppercase; white-space:nowrap; opacity:.85; max-width:20vw; overflow:hidden; text-overflow:ellipsis; }
-  /* narrow screens: keep the player compact so it never reaches the bottom-left icons */
-  @media (max-width:560px){ #ptitle{ display:none; } #seek{ width:30vw; } }
+  #ptitle{ font-size:11px; letter-spacing:.2em; text-transform:uppercase; white-space:nowrap; opacity:.85; }
+  /* narrow screens: keep the seek compact and let a long title wrap instead of clipping */
+  @media (max-width:560px){ #seek{ width:30vw; } #ptitle{ white-space:normal; } }
   /* hidden SoundCloud engine — rendered (so it can play) but off-screen + invisible */
   #sc{ position:fixed; left:-9999px; bottom:0; width:1px; height:1px; border:0; opacity:0; pointer-events:none; }
 
@@ -107,7 +113,9 @@
 
   <!-- the site's own minimal player UI (revealed once the station's queue loads) -->
   <div id="player" hidden>
+    <button id="prev" class="nav" aria-label="previous track">&#9198;</button>
     <button id="pp" aria-label="play / pause">&#9654;</button>
+    <button id="next" class="nav" aria-label="next track">&#9197;</button>
     <div id="seek"><div id="seekfill"></div></div>
     <span id="ptitle"></span>
   </div>
@@ -341,46 +349,74 @@
   })();
 
   /* ---- perpetual radio: a hidden SoundCloud widget wearing the site's own
-         minimal UI. shuffles the profile's tracks, and the first play "tunes in"
-         mid-broadcast (random track, random offset) so the station feels like it
-         was already on the air before you arrived. loops forever. ---- */
+         minimal UI. the widget plays through the whole catalogue on its own; we
+         just start on a random track and "tune in" mid-broadcast (random offset)
+         on first play, so the station feels like it was already on the air. ⏮/⏭
+         step tracks; at the end of the catalogue it loops back to the top. ---- */
   (function radio(){
     if(!window.SC || !SC.Widget) return;   // widget api failed to load → stay hidden
     const el    = document.getElementById('player');
     const pp    = document.getElementById('pp');
+    const prev  = document.getElementById('prev');
+    const next  = document.getElementById('next');
     const seek  = document.getElementById('seek');
     const fill  = document.getElementById('seekfill');
     const title = document.getElementById('ptitle');
     const PLAY = '▶', PAUSE = '❚❚';
     const w = SC.Widget(document.getElementById('sc'));
     const E = SC.Widget.Events;
-    let order = [], idx = 0, ready = false, tunedIn = false, pendingTune = false;
+    let count = 0, cur = 0, ready = false, tunedIn = false, pendingTune = false, advancing = false;
+    // SoundCloud lazy-loads the playlist: getSounds() returns only a few tracks at
+    // first and fills in over time, so we keep `count` refreshed (below) rather than
+    // trusting its initial value — otherwise every index wraps against a count of 1.
+    let wc = null;
+    const cmd = ()=> wc || (wc = SC.Widget(document.getElementById('sc')));
+    function goto(n){
+      if(!count) return;
+      cur = ((n % count) + count) % count;       // wrap both ends → endless station
+      // skip + play on a wrapper made after load (the long-lived `w` has a broken
+      // skip()), deferred off any widget event callback where a skip() would no-op.
+      setTimeout(()=>{ const x = cmd(); x.skip(cur); x.play(); }, 0);
+    }
+    function advance(){ if(advancing) return; advancing = true; goto(cur + 1); }
 
     const showTitle = ()=> w.getCurrentSound(s=>{
       if(!s) return;
       const y = (''+(s.release_year || s.display_date || s.created_at || '')).match(/\d{4}/);
       title.textContent = y ? `${s.title} (${y[0]})` : s.title;
     });
-    const playAt = i => { if(order.length){ idx = (i+order.length)%order.length; w.skip(order[idx]); } };
 
-    w.bind(E.READY, ()=> w.getSounds(sounds=>{
-      order = shuffle(sounds.map((_,i)=>i));   // our own shuffled running order
+    const refreshCount = ()=> w.getSounds(ss=>{ if(ss && ss.length > count) count = ss.length; });
+    w.bind(E.READY, ()=>{
+      refreshCount();
       ready = true;
       el.hidden = false;                        // reveal controls now there's a queue
-    }));
-    w.bind(E.PLAY_PROGRESS, e=>{ fill.style.width = (e.relativePosition*100)+'%'; });
+      // the playlist streams in over a few seconds; poll until the count settles so
+      // it's accurate before the first track ends and we need to advance.
+      let tries = 0; const t = setInterval(()=>{ refreshCount(); if(++tries >= 8) clearInterval(t); }, 1500);
+    });
+    // the widget loops the current track at its end instead of advancing, so we hand
+    // off to the next track just *before* the end — the loop never gets to fire.
+    w.bind(E.PLAY_PROGRESS, e=>{
+      fill.style.width = (e.relativePosition*100)+'%';
+      if(e.relativePosition >= 0.997) advance();
+    });
     w.bind(E.PLAY, ()=>{
-      pp.textContent = PAUSE; showTitle();
+      advancing = false;
+      pp.textContent = PAUSE; showTitle(); refreshCount();
+      w.getCurrentSoundIndex(i=>{ cur = i; });
       if(pendingTune){ pendingTune = false; w.getDuration(d=>{ if(d) w.seekTo(Math.random()*d*0.9); }); }
     });
-    w.bind(E.PAUSE,  ()=>{ pp.textContent = PLAY; });
-    w.bind(E.FINISH, ()=> playAt(idx+1));      // roll to the next track in our order
+    w.bind(E.PAUSE, ()=>{ pp.textContent = PLAY; });
+    w.bind(E.FINISH, advance);   // fallback if the pre-end hand-off was ever missed
 
     pp.addEventListener('click', ()=>{
       if(!ready) return;
-      if(!tunedIn){ tunedIn = true; pendingTune = true; w.skip(order[0]); w.play(); return; }
+      if(!tunedIn){ tunedIn = true; pendingTune = true; goto((Math.random()*count)|0); return; }
       w.isPaused(p => p ? w.play() : w.pause());
     });
+    prev.addEventListener('click', ()=>{ if(ready){ tunedIn = true; goto(cur - 1); } });
+    next.addEventListener('click', ()=>{ if(ready){ tunedIn = true; goto(cur + 1); } });
     seek.addEventListener('click', e=>{
       const r = seek.getBoundingClientRect();
       w.getDuration(d=>{ if(d) w.seekTo((e.clientX-r.left)/r.width * d); });
