@@ -1,0 +1,41 @@
+name: Rotate share image
+
+# Picks a random image from the manifest and rebuilds og.jpg (the link-preview
+# cover) so pasted links unfurl with a changing image over time. Static hosting
+# can't randomize per-share, so this rotates the single cached image instead.
+on:
+  schedule:
+    - cron: '17 8 * * *'   # daily ~08:17 UTC
+  push:
+    branches: [main]
+    paths:
+      - 'media/manifest.json'
+      - 'media/images/**'
+      - 'scripts/gen-og.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rotate-og
+  cancel-in-progress: true
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate og.jpg
+        run: bash scripts/gen-og.sh
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- og.jpg; then
+            echo "No change to og.jpg."
+          else
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add og.jpg
+            git commit -m "Rotate share image (auto)"
+            git push
+          fi
