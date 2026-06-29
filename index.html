@@ -161,7 +161,7 @@
     <button id="next" class="nav" aria-label="next track"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 5.5 15 12l-8.5 6.5z"/><rect x="16.1" y="5.5" width="2.4" height="13" rx="1"/></svg></button>
     <div id="seek"><div id="seekfill"></div></div>
     <span id="ptitle"></span>
-    <button id="lyrtoggle" class="nav" aria-label="toggle lyrics" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="2" rx="1"/><rect x="4" y="11" width="12" height="2" rx="1"/><rect x="4" y="16" width="14" height="2" rx="1"/></svg></button>
+    <button id="lyrtoggle" class="nav" aria-label="toggle lyrics" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="2" rx="1"/><rect x="4" y="11" width="12" height="2" rx="1"/><rect x="4" y="16" width="14" height="2" rx="1"/></svg></button>
   </div>
 
   <!-- optional lyric shape (revealed only when toggled on AND the track has lyrics) -->
@@ -416,7 +416,15 @@
     const PLAY = '▶', PAUSE = '❚❚';
     const w = SC.Widget(document.getElementById('sc'));
     const E = SC.Widget.Events;
-    let count = 0, cur = 0, ready = false, tunedIn = false, pendingTune = false, advancing = false;
+    let count = 0, cur = 0, ready = false, tunedIn = false, freshTune = false, advancing = false;
+    // every fresh track tunes in at a random spot and fades up from silence, so a
+    // visitor always drops into a broadcast already in progress.
+    let fadeIv = null;
+    function fadeIn(){
+      if(fadeIv) clearInterval(fadeIv);
+      let v = 0; try{ w.setVolume(0); }catch(e){}
+      fadeIv = setInterval(()=>{ v += 5; try{ w.setVolume(Math.min(100, v)); }catch(e){} if(v >= 100){ clearInterval(fadeIv); fadeIv = null; } }, 90);
+    }
     // SoundCloud lazy-loads the playlist: getSounds() returns only a few tracks at
     // first and fills in over time, so we keep `count` refreshed (below) rather than
     // trusting its initial value — otherwise every index wraps against a count of 1.
@@ -425,6 +433,7 @@
     function jump(n){
       if(!count) return;
       cur = ((n % count) + count) % count;
+      freshTune = true;                          // PLAY will seek to a random spot + fade in
       // skip + play on a wrapper made after load (the long-lived `w` has a broken
       // skip()), deferred off any widget event callback where a skip() would no-op.
       setTimeout(()=>{ const x = cmd(); x.skip(cur); x.play(); }, 0);
@@ -457,7 +466,7 @@
       const btn  = document.getElementById('lyrtoggle');
       const FW = 200, N = 4;                                  // 4 faces → a cube
       const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-      let faces = [], lines = [], qi = 0, on = false, have = false, rotY = 0, prev = null;
+      let faces = [], lines = [], qi = 0, on = true, have = false, rotY = 0, prev = null;
       const radius = n => (FW/2)/Math.tan(Math.PI/n);
       const fill = ()=>{ for(const f of faces) f.el.textContent = lines.length ? lines[qi++ % lines.length] : ''; };
       function build(){
@@ -512,7 +521,6 @@
     if(DEMO){                                  // reveal the shape with sample lyrics, never any audio
       w.bind(E.READY, ()=> w.pause());
       w.bind(E.PLAY,  ()=> w.pause());         // hard guard: demo stays silent no matter what
-      document.getElementById('lyrtoggle').click();
       lyr.setLyrics("I'm out of sight\nI'm out of mind\nThere's a face that I know\nI haven't seen in some time\nI need the comfort\nOnly you can provide\nWhenever you want to\nPoke me in the eye");
     }
 
@@ -542,14 +550,14 @@
       advancing = false;
       pp.textContent = PAUSE; showTitle(); refreshCount();
       w.getCurrentSoundIndex(i=>{ cur = i; });
-      if(pendingTune){ pendingTune = false; w.getDuration(d=>{ if(d) w.seekTo(Math.random()*d*0.9); }); }
+      if(freshTune){ freshTune = false; try{ w.setVolume(0); }catch(e){} w.getDuration(d=>{ if(d) w.seekTo(Math.random()*d*0.9); fadeIn(); }); }
     });
     w.bind(E.PAUSE, ()=>{ pp.textContent = PLAY; });
     w.bind(E.FINISH, advance);   // fallback if the pre-end hand-off was ever missed
 
     pp.addEventListener('click', ()=>{
       if(!ready) return;
-      if(!tunedIn){ tunedIn = true; pendingTune = true; nextTrack(); return; }
+      if(!tunedIn){ tunedIn = true; nextTrack(); return; }
       w.isPaused(p => p ? w.play() : w.pause());
     });
     prev.addEventListener('click', ()=>{ if(ready){ tunedIn = true; prevTrack(); } });
