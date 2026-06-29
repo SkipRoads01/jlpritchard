@@ -18,6 +18,10 @@
 <meta name="twitter:title" content="J L Pritchard" />
 <meta name="twitter:image" content="https://jlpritchard.com/og.jpg" />
 
+<!-- lyric typeface -->
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&display=swap" />
+
 <title>&nbsp;</title>
 <style>
   /* ============================================================
@@ -95,6 +99,25 @@
   /* hidden SoundCloud engine — rendered (so it can play) but off-screen + invisible */
   #sc{ position:fixed; left:-9999px; bottom:0; width:1px; height:1px; border:0; opacity:0; pointer-events:none; }
 
+  /* ---- lyric prism: optional drifting lyrics, wrapped on a slow-turning shape.
+         off by default; the front face reads square-on while the others bend away
+         and fade as it rotates, recycling lines around the back forever. ---- */
+  #lyrics{
+    position:fixed; right:6vw; top:50%; transform:translateY(-50%);
+    z-index:65; width:200px; height:120px; perspective:820px;
+    mix-blend-mode:difference; pointer-events:none;        /* never block the tiles behind */
+    opacity:0; transition:opacity .6s ease;
+  }
+  #lyrics.show{ opacity:1; }
+  #lyricring{ position:absolute; inset:0; transform-style:preserve-3d; }
+  #lyrics .face{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    text-align:center; padding:0 16px; color:#fff;
+    font:18px/1.3 "Fraunces",Georgia,"Times New Roman",serif; letter-spacing:.01em;
+    backface-visibility:hidden; will-change:opacity,filter;
+  }
+  @media (max-width:560px){ #lyrics{ right:3vw; width:150px; height:96px; } #lyrics .face{ font-size:16px; } }
+
   /* ---- social links, bottom-left ---- */
   #social{ position:fixed; left:22px; bottom:22px; z-index:60; display:flex; gap:14px; align-items:center; }
   #social a{ width:42px; height:42px; display:block; filter:drop-shadow(0 2px 7px rgba(0,0,0,.55)); transition:transform .18s ease, filter .18s ease; }
@@ -138,7 +161,11 @@
     <button id="next" class="nav" aria-label="next track"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 5.5 15 12l-8.5 6.5z"/><rect x="16.1" y="5.5" width="2.4" height="13" rx="1"/></svg></button>
     <div id="seek"><div id="seekfill"></div></div>
     <span id="ptitle"></span>
+    <button id="lyrtoggle" class="nav" aria-label="toggle lyrics" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="2" rx="1"/><rect x="4" y="11" width="12" height="2" rx="1"/><rect x="4" y="16" width="14" height="2" rx="1"/></svg></button>
   </div>
+
+  <!-- optional lyric shape (revealed only when toggled on AND the track has lyrics) -->
+  <div id="lyrics"><div id="lyricring"></div></div>
 
   <!-- hidden SoundCloud engine: loads the profile's tracks; our UI drives it -->
   <iframe id="sc" allow="autoplay" scrolling="no" frameborder="no"
@@ -149,6 +176,10 @@
 (async function(){
   const data = await fetch('media/manifest.json').then(r=>r.json());
   const VIDEOS = data.videos, IMAGES = data.images;
+  // ?demo — preview mode: force the muted video atmosphere to start (so the
+  // multiply-blended images aren't black) and show the lyric shape with sample
+  // text, all WITHOUT playing any audio. for judging the look hands-off.
+  const DEMO = /(?:[?&#])demo\b/.test(location.search + location.hash);
   const rand = (a,b)=>a+Math.random()*(b-a);
   const pick = arr => arr[Math.floor(Math.random()*arr.length)];
   const shuffle = a => { a=a.slice(); for(let i=a.length-1;i>0;i--){const j=(Math.random()*(i+1))|0;[a[i],a[j]]=[a[j],a[i]];} return a; };
@@ -414,10 +445,82 @@
     function prevTrack(){ if(hpos > 0){ hpos--; jump(history[hpos]); } }
     function advance(){ if(advancing) return; advancing = true; nextTrack(); }
 
+    /* ---- lyric prism (optional): wraps the current track's lyrics around a slow
+           3D shape. lyrics come from a per-title override file (media/lyrics.json)
+           when present, else the track's own SoundCloud description. toggled with
+           the ≣ button; stays hidden unless toggled on AND the track has lyrics. ---- */
+    let LYRICS = {};
+    fetch('media/lyrics.json').then(r=> r.ok ? r.json() : {}).then(j=>{ LYRICS = j || {}; }).catch(()=>{});
+    const lyr = (function(){
+      const wrap = document.getElementById('lyrics');
+      const ring = document.getElementById('lyricring');
+      const btn  = document.getElementById('lyrtoggle');
+      const FW = 200, N = 4;                                  // 4 faces → a cube
+      const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      let faces = [], lines = [], qi = 0, on = false, have = false, rotY = 0, prev = null;
+      const radius = n => (FW/2)/Math.tan(Math.PI/n);
+      const fill = ()=>{ for(const f of faces) f.el.textContent = lines.length ? lines[qi++ % lines.length] : ''; };
+      function build(){
+        ring.innerHTML = ''; faces = [];
+        const r = radius(N);
+        for(let i=0;i<N;i++){
+          const f = document.createElement('div'); f.className = 'face';
+          f.style.transform = `rotateY(${i*360/N}deg) translateZ(${r}px)`;
+          ring.appendChild(f); faces.push({el:f, base:i*360/N, last:1});
+        }
+        fill();
+      }
+      const reveal = ()=> wrap.classList.toggle('show', on && have);
+      // descriptions arrive either as line-broken verse or as one prose block;
+      // keep existing line breaks, and split any long line into clause-sized pieces
+      // so a prose track scrolls face-by-face instead of dumping one blob.
+      function toLines(text){
+        const out = [];
+        (text||'').replace(/\r/g,'').split('\n').map(s=>s.trim()).filter(Boolean).forEach(l=>{
+          if(l.length <= 34){ out.push(l); return; }
+          l.split(/(?<=[.,;!?])\s+/).forEach(seg=>{
+            seg = seg.trim();
+            while(seg.length > 40){ let cut = seg.lastIndexOf(' ', 40); if(cut < 20) cut = 40; out.push(seg.slice(0,cut).trim()); seg = seg.slice(cut).trim(); }
+            if(seg) out.push(seg);
+          });
+        });
+        return out.slice(0,80);
+      }
+      function setLyrics(text){
+        lines = toLines(text);
+        qi = 0; have = lines.length > 0; fill(); reveal();
+      }
+      function frame(t){
+        if(prev===null) prev = t;
+        const dt = (t-prev)/1000; prev = t;
+        if(on && have && !reduce) rotY = (rotY + 7*dt) % 360;   // slow drift, ~7°/s
+        ring.style.transform = `rotateX(-11deg) rotateY(${rotY}deg)`;
+        for(const f of faces){
+          const c = Math.cos((rotY+f.base)*Math.PI/180);
+          f.el.style.opacity = c>0 ? Math.pow(c,0.55).toFixed(3) : '0';
+          f.el.style.filter  = `blur(${((1-Math.max(0,c))*2.2).toFixed(2)}px)`;
+          if(f.last>0 && c<=0 && lines.length) f.el.textContent = lines[qi++ % lines.length];
+          f.last = c;
+        }
+        requestAnimationFrame(frame);
+      }
+      btn.addEventListener('click', ()=>{ on = !on; btn.setAttribute('aria-pressed', on?'true':'false'); reveal(); });
+      build(); requestAnimationFrame(frame);
+      return { setLyrics };
+    })();
+
+    if(DEMO){                                  // reveal the shape with sample lyrics, never any audio
+      w.bind(E.READY, ()=> w.pause());
+      w.bind(E.PLAY,  ()=> w.pause());         // hard guard: demo stays silent no matter what
+      document.getElementById('lyrtoggle').click();
+      lyr.setLyrics("I'm out of sight\nI'm out of mind\nThere's a face that I know\nI haven't seen in some time\nI need the comfort\nOnly you can provide\nWhenever you want to\nPoke me in the eye");
+    }
+
     const showTitle = ()=> w.getCurrentSound(s=>{
       if(!s) return;
       const y = (''+(s.release_year || s.display_date || s.created_at || '')).match(/\d{4}/);
       title.textContent = y ? `${s.title} (${y[0]})` : s.title;
+      lyr.setLyrics((LYRICS && LYRICS[s.title]) || s.description || '');
     });
 
     const refreshCount = ()=> w.getSounds(ss=>{ if(ss && ss.length > count) count = ss.length; });
@@ -458,8 +561,9 @@
   })();
 
   // robustness: retry autoplay on any gesture / when tab regains focus
-  function kick(){ liveVideos.forEach(v=>v.play().catch(()=>{})); }
+  function kick(){ liveVideos.forEach(v=>{ v.muted = true; v.play().catch(()=>{}); }); }
   ['pointerdown','keydown','touchstart'].forEach(e=>window.addEventListener(e,kick,{passive:true}));
+  if(DEMO){ let n=0; const di=setInterval(()=>{ kick(); if(++n>10) clearInterval(di); }, 400); }   // nudge muted video past autoplay block
   document.addEventListener('visibilitychange',()=>{ if(!document.hidden) kick(); });
 })();
 </script>
