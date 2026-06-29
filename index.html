@@ -466,18 +466,17 @@
       const btn  = document.getElementById('lyrtoggle');
       const FW = 200, N = 4;                                  // 4 faces → a cube
       const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-      let faces = [], lines = [], qi = 0, on = true, have = false, rotY = 0, prev = null;
+      let faces = [], lines = [], on = true, have = false;
+      let rotY = 0, target = 0, curIdx = -1, snap = true, prev = null;
       const radius = n => (FW/2)/Math.tan(Math.PI/n);
-      const fill = ()=>{ for(const f of faces) f.el.textContent = lines.length ? lines[qi++ % lines.length] : ''; };
       function build(){
         ring.innerHTML = ''; faces = [];
         const r = radius(N);
         for(let i=0;i<N;i++){
           const f = document.createElement('div'); f.className = 'face';
           f.style.transform = `rotateY(${i*360/N}deg) translateZ(${r}px)`;
-          ring.appendChild(f); faces.push({el:f, base:i*360/N, last:1});
+          ring.appendChild(f); faces.push({el:f, base:i*360/N});
         }
-        fill();
       }
       const reveal = ()=> wrap.classList.toggle('show', on && have);
       // descriptions arrive either as line-broken verse or as one prose block;
@@ -495,40 +494,65 @@
         });
         return out.slice(0,80);
       }
+      // put 4 consecutive lines (prev / current / next / next+1) on the cube faces so
+      // the front face is always the current line; only the hidden back face ever
+      // changes text, so the swaps are never seen.
+      function placeAround(idx){
+        const L = lines.length;
+        for(let d=-1; d<=2; d++){
+          const li = idx + d, fi = ((li % N) + N) % N;
+          faces[fi].el.textContent = (li >= 0 && li < L) ? lines[li] : '';
+        }
+      }
       function setLyrics(text){
         lines = toLines(text);
-        qi = 0; have = lines.length > 0; fill(); reveal();
+        have = lines.length > 0;
+        curIdx = -1; snap = true; rotY = 0; target = 0;
+        if(have){ curIdx = 0; placeAround(0); }     // show the opening even before playback reports in
+        reveal();
+      }
+      // drive the shape from real playback position (0..1): the front face tracks how
+      // far through the song you are, and the lyric scrolls through once across the track.
+      function setProgress(rel){
+        if(!have) return;
+        const L = lines.length;
+        target = -rel * L * 90;                      // continuous: one quarter-turn per line
+        const idx = Math.min(L-1, Math.max(0, Math.floor(rel * L)));
+        if(idx !== curIdx){ curIdx = idx; placeAround(idx); }
+        if(snap){ rotY = target; snap = false; }      // new track: jump straight to its position
       }
       function frame(t){
         if(prev===null) prev = t;
         const dt = (t-prev)/1000; prev = t;
-        if(on && have && !reduce) rotY = (rotY + 7*dt) % 360;   // slow drift, ~7°/s
+        rotY += (target - rotY) * (reduce ? 1 : Math.min(1, dt*4));   // ease toward the playback angle
         ring.style.transform = `rotateX(-11deg) rotateY(${rotY}deg)`;
         for(const f of faces){
           const c = Math.cos((rotY+f.base)*Math.PI/180);
           f.el.style.opacity = c>0 ? Math.pow(c,0.55).toFixed(3) : '0';
           f.el.style.filter  = `blur(${((1-Math.max(0,c))*2.2).toFixed(2)}px)`;
-          if(f.last>0 && c<=0 && lines.length) f.el.textContent = lines[qi++ % lines.length];
-          f.last = c;
         }
         requestAnimationFrame(frame);
       }
       btn.addEventListener('click', ()=>{ on = !on; btn.setAttribute('aria-pressed', on?'true':'false'); reveal(); });
       build(); requestAnimationFrame(frame);
-      return { setLyrics };
+      return { setLyrics, setProgress };
     })();
 
     if(DEMO){                                  // reveal the shape with sample lyrics, never any audio
       w.bind(E.READY, ()=> w.pause());
       w.bind(E.PLAY,  ()=> w.pause());         // hard guard: demo stays silent no matter what
       lyr.setLyrics("I'm out of sight\nI'm out of mind\nThere's a face that I know\nI haven't seen in some time\nI need the comfort\nOnly you can provide\nWhenever you want to\nPoke me in the eye");
+      window.__lyr = lyr;                      // exposed for inspection
+      let dr = 0; setInterval(()=>{ dr = (dr + 0.01) % 1; lyr.setProgress(dr); }, 220);   // fake playhead sweep
     }
 
+    let lastSound = null;
     const showTitle = ()=> w.getCurrentSound(s=>{
       if(!s) return;
       const y = (''+(s.release_year || s.display_date || s.created_at || '')).match(/\d{4}/);
       title.textContent = y ? `${s.title} (${y[0]})` : s.title;
-      lyr.setLyrics((LYRICS && LYRICS[s.title]) || s.description || '');
+      const key = s.id != null ? s.id : s.title;     // only reload lyrics on a real track change
+      if(key !== lastSound){ lastSound = key; lyr.setLyrics((LYRICS && LYRICS[s.title]) || s.description || ''); }
     });
 
     const refreshCount = ()=> w.getSounds(ss=>{ if(ss && ss.length > count) count = ss.length; });
@@ -544,6 +568,7 @@
     // off to the next track just *before* the end — the loop never gets to fire.
     w.bind(E.PLAY_PROGRESS, e=>{
       fill.style.width = (e.relativePosition*100)+'%';
+      lyr.setProgress(e.relativePosition);          // lyric shape tracks the playhead
       if(e.relativePosition >= 0.997) advance();
     });
     w.bind(E.PLAY, ()=>{
